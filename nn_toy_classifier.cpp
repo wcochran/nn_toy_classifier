@@ -78,3 +78,19 @@ public:
         return _modules.back()->output();
     }
 };
+
+int main(int argc, char *argv[]) {
+    SequentialModule
+    (
+     {
+         std::make_unique<LinearModule>(782, 128),
+         std::make_unique<ReLUModule>(128),
+         std::make_unique<LinearModule>(128, 64),
+         std::make_unique<ReLUModule>(64),
+         std::make_unique<LinearModule>(64, 10),
+         std::make_unique<SoftMaxModule>(10)
+     }
+    );
+    
+    return 0;
+}
