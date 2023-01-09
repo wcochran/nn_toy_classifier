@@ -80,17 +80,26 @@ public:
 };
 
 int main(int argc, char *argv[]) {
-    SequentialModule
-    (
-     {
-         std::make_unique<LinearModule>(782, 128),
-         std::make_unique<ReLUModule>(128),
-         std::make_unique<LinearModule>(128, 64),
-         std::make_unique<ReLUModule>(64),
-         std::make_unique<LinearModule>(64, 10),
-         std::make_unique<SoftMaxModule>(10)
-     }
-    );
+    // SequentialModule classifier
+    // (
+    //  {
+    //      std::make_unique<LinearModule>(782, 128),
+    //      std::make_unique<ReLUModule>(128),
+    //      std::make_unique<LinearModule>(128, 64),
+    //      std::make_unique<ReLUModule>(64),
+    //      std::make_unique<LinearModule>(64, 10),
+    //      std::make_unique<SoftMaxModule>(10)
+    //  }
+    // );
+
+    std::vector<std::unique_ptr<Module>> modules;
+    modules.emplace_back(std::make_unique<LinearModule>(782, 128));
+    modules.emplace_back(std::make_unique<ReLUModule>(128));
+    modules.emplace_back(std::make_unique<LinearModule>(128, 64));
+    modules.emplace_back(std::make_unique<ReLUModule>(64));
+    modules.emplace_back(std::make_unique<LinearModule>(64, 10));
+    modules.emplace_back(std::make_unique<SoftMaxModule>(10));
+    SequentialModule classifier(std::move(modules));
     
     return 0;
 }
