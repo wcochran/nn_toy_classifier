@@ -25,7 +25,7 @@ public:
     void setPreviousLayer(Model* prev) {_prev = prev;}
     virtual void zeroGrad() {};
     virtual void backward(const Eigen::VectorXf& grad) = 0;
-    virtual void update(float learningRate) = 0;
+    virtual void update(float learningRate) {};
 };
 
 class LinearModule : public Module { // fully connected
@@ -74,8 +74,8 @@ public:
     //               = Sum_i dL/dz_i * W_{ij}
     //       dL/dx   = [dL/dz_0 dL/dz_1 ... dL/dz_{N-1}] * W
     //
-    virtual void backward(const Eigen::MatrixXf& dz) {
-        assert(dz.rows() = numOutputs());
+    virtual void backward(const Eigen::VectorXf& dz) {
+        assert(dz.size() = numOutputs());
         const Eigen::MatrixXf dW = dz * _x.transpose();
         _dW += dW;
         if (_prev != nullptr) {
@@ -101,8 +101,16 @@ public:
     }
     virtual const Eigen::VectorXf& output() const {return _a;}
 
-    virtual void backward(const Eigen::VectorXf& grad) = 0;
-    virtual void update(float learningRate) = 0;
+    virtual void backward(const Eigen::VectorXf& grad) {
+        if (_prev != nullptr) {
+            assert(grad.size() == numOutputs());
+            const Eigen::VectorXf& dzdx = _a.unaryExpr([](float a) -> float {
+                return (a > 0) ? 1.0f : 0.0f;
+            });
+            const Eigen::VectorXf dLdz = grad.cwiseProduce(dzdx);
+            _prev->backward(dLdZ);
+        }
+    }
 };
 
 class SoftMaxModule : public Module {
@@ -121,6 +129,9 @@ public:
         return _a;
     }
     virtual const Eigen::VectorXf& output() const {return _a;}
+    virtual void backward(const Eigen::VectorXf& grad) {
+        assert(false); // unimplemented
+    }
 };
 
 class SequentialModule : public Module {
