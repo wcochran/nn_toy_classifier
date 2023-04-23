@@ -9,7 +9,8 @@ class Module {
         Sigmoid,
         ReLU,
         SoftMax,
-        Sequential
+        Sequential,
+        MSELoss
     };
     ModuleType _type;
     const size_t _numInputs, _numOutputs;
@@ -46,11 +47,6 @@ public:
     virtual const Eigen::VectorXf& output() const {return _z;}
 
     virtual void zeroGrad() { _dW.setZero(); }
-
-    virtual void backward(const Eigen::VectorXf& grad) {
-        assert(grad.size() = numOutputs());
-        
-    }
 
     //
     // We are given the input accumulated gradients {dL/dz_i} for each
@@ -89,6 +85,29 @@ public:
     }
 };
 
+class SigmoidModule : public Module {
+    Eigen::VectorXf _z; // cached output
+    ReLUModule(size_t inOut) : Module(Sigmoid, inOut, inOut), _a(inOut) {}
+public:
+    virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
+        _z.noalias() = x.unaryExpr([](float elem) -> float {
+            const float ex = std::exp(elem);
+            return ex/(ex + 1);
+        });
+        return _z;
+    }
+    virtual const Eigen::VectorXf& output() const {return _z;}
+    virtual void backward(const Eigen::VectorXf& grad) {
+        if (_prev != nullptr) {
+            assert(grad.size() == numOutputs());
+            const Eigen::VectorXf one = Eigen::VectorXf::Constant(numOutputs,1.0f);
+            const Eigen::VectorXf dzdx = _z.cwizeProdect*(one - _z); // s' = s*(1 - s)
+            const Eigen::VectorXf dLdz = grad.cwiseProduct(dzdx);
+            _prev->backward(dLdZ);
+        }
+    }
+};
+
 class ReLUModule : public Module {
     Eigen::VectorXf _a; // cached output
 public:
@@ -104,10 +123,10 @@ public:
     virtual void backward(const Eigen::VectorXf& grad) {
         if (_prev != nullptr) {
             assert(grad.size() == numOutputs());
-            const Eigen::VectorXf& dzdx = _a.unaryExpr([](float a) -> float {
+            const Eigen::VectorXf dzdx = _a.unaryExpr([](float a) -> float {
                 return (a > 0) ? 1.0f : 0.0f;
             });
-            const Eigen::VectorXf dLdz = grad.cwiseProduce(dzdx);
+            const Eigen::VectorXf dLdz = grad.cwiseProduct(dzdx);
             _prev->backward(dLdZ);
         }
     }
@@ -154,8 +173,49 @@ public:
     virtual const Eigen::VectorXf& output() const {
         return _modules.back()->output();
     }
+
+    virtual void zeroGrad() {
+        for (auto&& m : _modules)
+            m->zeroGrad();
+    }
+    
+    virtual void backward(const Eigen::VectorXf& grad) {
+        assert(grad.size() == _modules.back().numOutputs());
+        _modules.back()->backward(grad);
+    }
+    
+    virtual void update(float learningRate) {
+        for (size_t i = 0; i < _modules.size(); i++)
+            _modules[i]->update(learningRate);
+    }
 };
 
+class MSELossModule : public Module {
+    Eigen::VectorXf _x, _y; // cached input
+    float _loss;            // cached output
+public:
+    MSELossModule(size_t in) : Module(MSELoss, in, 1) {}
+    virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
+        assert(false);  // not used for loss functions
+        return Eigen::VectorXf::Zero(1); // not reached;
+    }
+    virtual const float operator()(const Eigen::VectorXf& x,
+                                   const Eigen::VectorYf& y) {
+        _x = x; // computed result
+        _y = y; // target result
+        _loss = 0.5 * (x - y).squaredNorm();
+        return _loss;
+    }
+    virtual void backward(const Eigen::VectorXf& dz) {
+        assert(false);
+    }
+    virtual void backward() {
+        if (_prev == nullptr) return;
+        const Eigen::VectorXf dz = _x - _y;
+        _prev->backward(dz);
+    }
+};
+    
 int main(int argc, char *argv[]) {
     // SequentialModule classifier
     // (
