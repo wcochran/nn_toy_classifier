@@ -2,9 +2,12 @@
 #include <memory>
 #include <cassert>
 #include <Eigen/Dense>
+#include <random>
+#include <functional>
 
 class Module {
-    enum class ModelType {
+public:
+    enum class ModuleType {
         Linear,
         Sigmoid,
         ReLU,
@@ -12,10 +15,9 @@ class Module {
         Sequential,
         MSELoss
     };
-    ModuleType _type;
+    const ModuleType _type;
     const size_t _numInputs, _numOutputs;
-    Model *_prev;  // weak ptr to previous layer (nullptr => input layer)
-public:
+    Module *_prev;  // weak ptr to previous layer (nullptr => input layer)
     Module(ModuleType t, size_t in, size_t out) : _type{t}, _numInputs{in}, _numOutputs{out}, _prev{nullptr} {}
     virtual ~Module() {};
     size_t numInputs() const {return _numInputs;}
@@ -23,7 +25,7 @@ public:
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& input) = 0;
     virtual const Eigen::VectorXf& output() const = 0;
 
-    void setPreviousLayer(Model* prev) {_prev = prev;}
+    void setPrevious(Module* prev) {_prev = prev;}
     virtual void zeroGrad() {};
     virtual void backward(const Eigen::VectorXf& grad) = 0;
     virtual void update(float learningRate) {};
@@ -36,7 +38,7 @@ class LinearModule : public Module { // fully connected
     Eigen::MatrixXf _dW;  // weight + bias gradients
 public:
     LinearModule(size_t in, size_t out)
-        : Module(Linear, in, out), _x(in), _W(out,in+1), _z(out), _dW(out,in+1) {}
+        : Module(ModuleType::Linear, in, out), _x(in), _W(out,in+1), _z(out), _dW(out,in+1) {}
     
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
         assert(x.rows() == numInputs());
@@ -46,6 +48,11 @@ public:
     }
     virtual const Eigen::VectorXf& output() const {return _z;}
 
+    //
+    // The last column are the biases
+    //
+    Eigen::MatrixXf& weights() { return _W; }
+    
     virtual void zeroGrad() { _dW.setZero(); }
 
     //
@@ -71,11 +78,11 @@ public:
     //       dL/dx   = [dL/dz_0 dL/dz_1 ... dL/dz_{N-1}] * W
     //
     virtual void backward(const Eigen::VectorXf& dz) {
-        assert(dz.size() = numOutputs());
+        assert(dz.size() == numOutputs());
         const Eigen::MatrixXf dW = dz * _x.transpose();
         _dW += dW;
         if (_prev != nullptr) {
-            const Eigen::Vector dx = dz.transpose() * W;
+            const Eigen::VectorXf dx = dz.transpose() * _W;
             _prev->backward(dx);
         }
     }
@@ -87,7 +94,7 @@ public:
 
 class SigmoidModule : public Module {
     Eigen::VectorXf _z; // cached output
-    ReLUModule(size_t inOut) : Module(Sigmoid, inOut, inOut), _a(inOut) {}
+    SigmoidModule(size_t inOut) : Module(ModuleType::Sigmoid, inOut, inOut), _z(inOut) {}
 public:
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
         _z.noalias() = x.unaryExpr([](float elem) -> float {
@@ -100,10 +107,10 @@ public:
     virtual void backward(const Eigen::VectorXf& grad) {
         if (_prev != nullptr) {
             assert(grad.size() == numOutputs());
-            const Eigen::VectorXf one = Eigen::VectorXf::Constant(numOutputs,1.0f);
-            const Eigen::VectorXf dzdx = _z.cwizeProdect*(one - _z); // s' = s*(1 - s)
+            const Eigen::VectorXf one = Eigen::VectorXf::Constant(numOutputs(),1.0f);
+            const Eigen::VectorXf dzdx = _z.cwiseProduct(one - _z); // s' = s*(1 - s)
             const Eigen::VectorXf dLdz = grad.cwiseProduct(dzdx);
-            _prev->backward(dLdZ);
+            _prev->backward(dLdz);
         }
     }
 };
@@ -111,7 +118,7 @@ public:
 class ReLUModule : public Module {
     Eigen::VectorXf _a; // cached output
 public:
-    ReLUModule(size_t inOut) : Module(ReLU, inOut, inOut), _a(inOut) {}
+    ReLUModule(size_t inOut) : Module(ModuleType::ReLU, inOut, inOut), _a(inOut) {}
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
         _a.noalias() = x.unaryExpr([](float elem) -> float {
             return std::max(0.f,elem);
@@ -127,7 +134,7 @@ public:
                 return (a > 0) ? 1.0f : 0.0f;
             });
             const Eigen::VectorXf dLdz = grad.cwiseProduct(dzdx);
-            _prev->backward(dLdZ);
+            _prev->backward(dLdz);
         }
     }
 };
@@ -135,7 +142,7 @@ public:
 class SoftMaxModule : public Module {
     Eigen::Vector<float, Eigen::Dynamic> _a;
 public:
-    SoftMaxModule(size_t inOut) : Module(SoftMax, inOut, inOut), _a(inOut) {}
+    SoftMaxModule(size_t inOut) : Module(ModuleType::SoftMax, inOut, inOut), _a(inOut) {}
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
         assert(x.rows() == numInputs());
         const Eigen::VectorXf e2x = x.unaryExpr([](float elem) -> float {
@@ -154,13 +161,13 @@ public:
 };
 
 class SequentialModule : public Module {
-    std::vector<std::unique_ptr<Module>> _modules;
+    std::vector<std::shared_ptr<Module>> _modules;
 public:
-    SequentialModule(std::vector<std::unique_ptr<Module>>&& modules)
-        : Module(Sequential, modules.front()->numInputs(), modules.back()->numOutputs()),
-          _modules(std::move(modules)) {
+    SequentialModule(std::vector<std::shared_ptr<Module>>& modules)
+        : Module(ModuleType::Sequential, modules.front()->numInputs(), modules.back()->numOutputs()),
+          _modules(modules) {
         for (size_t i = 1; i < _modules.size(); i++)
-            _modules[i].setPrevious(_modules[i-1].get());
+            _modules[i]->setPrevious(_modules[i-1].get());
     }
 
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
@@ -180,7 +187,7 @@ public:
     }
     
     virtual void backward(const Eigen::VectorXf& grad) {
-        assert(grad.size() == _modules.back().numOutputs());
+        assert(grad.size() == _modules.back()->numOutputs());
         _modules.back()->backward(grad);
     }
     
@@ -193,19 +200,23 @@ public:
 class MSELossModule : public Module {
     Eigen::VectorXf _x, _y; // cached input
     float _loss;            // cached output
+    Eigen::VectorXf _vloss; // loss as vector
 public:
-    MSELossModule(size_t in) : Module(MSELoss, in, 1) {}
+    MSELossModule(size_t in) : Module(ModuleType::MSELoss, in, 1), _x(in), _loss{}, _vloss(1) {}
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
         assert(false);  // not used for loss functions
-        return Eigen::VectorXf::Zero(1); // not reached;
+        static Eigen::VectorXf nada = Eigen::VectorXf::Zero(1);  // not reached;
+        return nada;
     }
     virtual const float operator()(const Eigen::VectorXf& x,
-                                   const Eigen::VectorYf& y) {
+                                   const Eigen::VectorXf& y) {
         _x = x; // computed result
         _y = y; // target result
         _loss = 0.5 * (x - y).squaredNorm();
+        _vloss(0) = _loss;
         return _loss;
     }
+    virtual const Eigen::VectorXf& output() const { return _vloss; }
     virtual void backward(const Eigen::VectorXf& dz) {
         assert(false);
     }
@@ -215,28 +226,62 @@ public:
         _prev->backward(dz);
     }
 };
-    
-int main(int argc, char *argv[]) {
-    // SequentialModule classifier
-    // (
-    //  {
-    //      std::make_unique<LinearModule>(782, 128),
-    //      std::make_unique<ReLUModule>(128),
-    //      std::make_unique<LinearModule>(128, 64),
-    //      std::make_unique<ReLUModule>(64),
-    //      std::make_unique<LinearModule>(64, 10),
-    //      std::make_unique<SoftMaxModule>(10)
-    //  }
-    // );
 
-    std::vector<std::unique_ptr<Module>> modules;
-    modules.emplace_back(std::make_unique<LinearModule>(782, 128));
-    modules.emplace_back(std::make_unique<ReLUModule>(128));
-    modules.emplace_back(std::make_unique<LinearModule>(128, 64));
-    modules.emplace_back(std::make_unique<ReLUModule>(64));
-    modules.emplace_back(std::make_unique<LinearModule>(64, 10));
-    modules.emplace_back(std::make_unique<SoftMaxModule>(10));
-    SequentialModule classifier(std::move(modules));
+void kaimingNormalInit(Eigen::MatrixXf& W) {
+    const auto N = W.cols() - 1; // num inputs
+    const auto M = W.rows();     // num outputs
+    const float var = 2.0/(N + M);
+    std::mt19937 gen(1234);
+    std::normal_distribution<> dist{0.0f, var};
+    for (size_t i = 0; i < M; i++)
+        for (size_t j = 0; j < M; j++)
+            W(i,j) = dist(gen);
+    W.col(N) = Eigen::VectorXf::Zero(M); // biases
+}
+
+#include <iostream>
+
+void celcius_to_farenheit() {
+    std::mt19937 gen(1234);
+    std::uniform_real_distribution<float> dist(0.0, 100.0);
     
+    constexpr size_t n = 10;
+    Eigen::VectorXf F(n);
+    Eigen::VectorXf C(n);
+    for (size_t i = 0; i < n; i++) {
+        const float c = dist(gen);
+        const float f = 9.0f/5 * c + 32.0f;
+        C(i) = c;
+        F(i) = f;
+    }
+
+    std::vector<std::shared_ptr<Module>> modules;
+    auto linearLayer = std::make_shared<LinearModule>(1, 1);
+    modules.emplace_back(linearLayer);
+    SequentialModule converter(modules);
+
+    MSELossModule lossFunc(converter.numOutputs());
+    lossFunc.setPrevious(&converter);
+    kaimingNormalInit(linearLayer->weights());
+
+    constexpr size_t numEpochs = 20;
+    constexpr float learningRate = 0.1;
+    for (size_t epoch = 0; epoch < numEpochs; epoch++) {
+        converter.zeroGrad();
+        for (size_t i = 0; i < n; i++) {
+            const Eigen::VectorXf x = C.row(i);
+            const Eigen::VectorXf y = converter(x);
+            const Eigen::VectorXf f = F.row(i);
+            const float loss = lossFunc(y,f);
+            lossFunc.backward();
+            std::cout << "epoch:" << epoch << " i:" << i << ": loss = " << loss << "\n";  
+        }
+        converter.update(learningRate);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    celcius_to_farenheit();
     return 0;
 }
+
