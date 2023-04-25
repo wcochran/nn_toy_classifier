@@ -36,9 +36,11 @@ class LinearModule : public Module { // fully connected
     Eigen::MatrixXf _W;   // weights + bias
     Eigen::VectorXf _z;   // cached output
     Eigen::MatrixXf _dW;  // weight + bias gradients
+    size_t _numGradients; // number of accumulate gradients in _dW
 public:
     LinearModule(size_t in, size_t out)
-        : Module(ModuleType::Linear, in, out), _x(in), _W(out,in+1), _z(out), _dW(out,in+1) {}
+        : Module(ModuleType::Linear, in, out), _x(in), _W(out,in+1), _z(out),
+          _dW(out,in+1), _numGradients{0} {}
     
     virtual const Eigen::VectorXf& operator()(const Eigen::VectorXf& x) {
         assert(x.rows() == numInputs());
@@ -53,7 +55,10 @@ public:
     //
     Eigen::MatrixXf& weights() { return _W; }
     
-    virtual void zeroGrad() { _dW.setZero(); }
+    virtual void zeroGrad() {
+        _numGradients = 0;
+        _dW.setZero();
+    }
 
     //
     // We are given the input accumulated gradients {dL/dz_i} for each
@@ -81,6 +86,7 @@ public:
         assert(dz.size() == numOutputs());
         const Eigen::MatrixXf dW = dz * _x.transpose();
         _dW += dW;
+        _numGradients++;
         if (_prev != nullptr) {
             const Eigen::VectorXf dx = dz.transpose() * _W;
             _prev->backward(dx);
@@ -88,7 +94,8 @@ public:
     }
     
     virtual void update(float learningRate) {
-        _W -= learningRate * _dW; // step in negative dir of gradient
+        assert(_numGradients > 0);
+        _W -= learningRate / _numGradients * _dW; // step in negative dir of gradient
     }
 };
 
@@ -299,7 +306,7 @@ void celcius_to_farenheit() {
     // Batch size = Input size.
     //
     constexpr size_t numEpochs = 70;
-    constexpr float learningRate = 0.5/n;
+    constexpr float learningRate = 0.5;
     for (size_t epoch = 0; epoch < numEpochs; epoch++) {
         converter.zeroGrad();
         float totalLoss = 0;
