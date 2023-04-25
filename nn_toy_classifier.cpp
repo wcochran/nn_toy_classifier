@@ -234,7 +234,7 @@ void kaimingNormalInit(Eigen::MatrixXf& W) {
     std::mt19937 gen(1234);
     std::normal_distribution<> dist{0.0f, var};
     for (size_t i = 0; i < M; i++)
-        for (size_t j = 0; j < M; j++)
+        for (size_t j = 0; j < N; j++)
             W(i,j) = dist(gen);
     W.col(N) = Eigen::VectorXf::Zero(M); // biases
 }
@@ -242,8 +242,13 @@ void kaimingNormalInit(Eigen::MatrixXf& W) {
 #include <iostream>
 
 void celcius_to_farenheit() {
+
+    //
+    // Create some input values and labels.
+    //
     std::mt19937 gen(1234);
-    std::uniform_real_distribution<float> dist(0.0, 100.0);
+    constexpr float lo_c = 0, hi_c = 100;
+    std::uniform_real_distribution<float> dist(lo_c, hi_c);
     
     constexpr size_t n = 10;
     Eigen::VectorXf F(n);
@@ -255,29 +260,86 @@ void celcius_to_farenheit() {
         F(i) = f;
     }
 
+    //
+    // Normalize input using mean and stdev of
+    // uniform distribution on interval [a,b].
+    //
+    constexpr float c_mean = (lo_c + hi_c)/2;
+    constexpr float sqrt12 = 3.4641016151f;
+    constexpr float c_stdev = (hi_c - lo_c)/sqrt12;
+    Eigen::VectorXf Cnorm(n);
+    for (size_t i = 0; i < n; i++) {
+        Cnorm(i) = (C(i) - c_mean)/c_stdev;
+    }
+
+    //
+    // Create MLP with one linear layer.
+    //
     std::vector<std::shared_ptr<Module>> modules;
     auto linearLayer = std::make_shared<LinearModule>(1, 1);
     modules.emplace_back(linearLayer);
     SequentialModule converter(modules);
 
+    //
+    // Create loss function
+    //
     MSELossModule lossFunc(converter.numOutputs());
     lossFunc.setPrevious(&converter);
+
+    //
+    // Initialize linear module weights according to
+    // Kaiming He algorithm (mimic torch.nn.init.kaiming_normal)
+    // This is typically used when the linear layer is followed
+    // by a ReLU function (which we don't have).
+    //
     kaimingNormalInit(linearLayer->weights());
 
-    constexpr size_t numEpochs = 20;
-    constexpr float learningRate = 0.1;
+    //
+    // Train.
+    // Batch size = Input size.
+    //
+    constexpr size_t numEpochs = 70;
+    constexpr float learningRate = 0.5/n;
     for (size_t epoch = 0; epoch < numEpochs; epoch++) {
         converter.zeroGrad();
+        float totalLoss = 0;
         for (size_t i = 0; i < n; i++) {
-            const Eigen::VectorXf x = C.row(i);
+            const Eigen::VectorXf x = Cnorm.row(i);
             const Eigen::VectorXf y = converter(x);
             const Eigen::VectorXf f = F.row(i);
             const float loss = lossFunc(y,f);
+            totalLoss += loss;
             lossFunc.backward();
-            std::cout << "epoch:" << epoch << " i:" << i << ": loss = " << loss << "\n";  
         }
+        const float averageLoss = totalLoss / n;
+        std::cout << "epoch:" << epoch << ": loss = " << averageLoss << "\n";
         converter.update(learningRate);
     }
+
+    //
+    // Trained celsius to farenheit converter.
+    //
+    auto celciusToFarenhright = [&](float celcius) -> float {
+        const float cnorm = (celcius - c_mean)/c_stdev;
+        Eigen::VectorXf cvec(1);
+        cvec(0) = cnorm;
+        const Eigen::VectorXf y = converter(cvec);
+        return y(0);
+    };
+
+    //
+    // Validation with known truth.
+    //
+    constexpr size_t nsamples = 20;
+    const float dc = (hi_c - lo_c)/(nsamples - 1);
+    for (size_t i = 0; i < nsamples; i++) {
+        const float c = lo_c + i*dc;
+        const float f = celciusToFarenhright(c);
+        const float f_truth = 9.0/5 * c + 32;
+        const float error = std::fabs(f - f_truth);
+        std::cout << c << " " << f << " " << error << "\n";
+    }
+
 }
 
 int main(int argc, char *argv[]) {
