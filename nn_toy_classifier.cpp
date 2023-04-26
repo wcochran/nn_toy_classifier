@@ -30,14 +30,14 @@ public:
     //   for each batch of input. Therefore some modules will likely have to dynamically
     //   resize matrices that cache data.
     // * The input data is assumed to persist for the lifetime of a forward and
-    //   and backward pass so that it can be interogated when gradients are
-    //   computed. We avoid
+    //   and backward pass so that it can be interrogated when gradients are
+    //   computed.
     // * Linear modules will want their input vectors to be homogenous.
     //   Unfortunatly they will have to make a copy on the input to add
     //   the extra row of 1's. Eigen doesn't seem to provide a multiplication
     //   operation that assumes an implicit 1 added (?)
     //
-    void operator()(Eigen::MatrixXf&& input) = delete; // dot no pass temporary
+    void operator()(Eigen::MatrixXf&& input) = delete; // do not pass temporary / r-value
     virtual const Eigen::MatrixXf& operator()(const Eigen::MatrixXf& input) = 0;
     virtual const Eigen::MatrixXf& output() const = 0;
 
@@ -90,35 +90,35 @@ public:
     //  Let M = num inputs, N = num outputs, B = batch size.
     //  We are give the gradients of the loss function with respect to output i
     //  for each batch item k:
-    //     [ dZ_{ik} ] = [ dL/dz_{ik} ],  i = 0 .. N-1,  k = 0 .. N-1
+    //     [ dLdZ_{ik} ] = [ dL/dZ_{ik} ],  i = 0 .. N-1,  k = 0 .. N-1
     //
     //  To update out local weights we need the following gradients for batch k
-    //     dL/W_{ij} = dL/dz_{ik} * dz_{ik}/dW_{ij}
+    //     dL/W_{ij} = dL/dZ_{ik} * dZ_{ik}/dW_{ij}
     //  We have
-    //     dz_{ik}/dW_{ij} = x_{jk}
+    //     dZ_{ik}/dW_{ij} = X_{jk}
     //  therefore for batch k we have
-    //     dL/W_{ij} = dL/dz_{ik} * x_{jk}.
+    //     dL/dW_{ij} = dL/dz_{ik} * x_{jk}.
     //  We will sum all the gradients over all the batches
-    //     dL/W_{ij} = Sum_{k=0..B-1} dL/dz_{ik} * x_{jk}.
-    //               = dZ * X^T
+    //     dL/dW_{ij} = Sum_{k=0..B-1} dL/dz_{ik} * X_{jk}.
+    //                = dZ * X^T
     //
     //  For continued back propogation to the previous layer (our inputs X are
     //  the previous layer's outputs) we need the
-    //     dL/dX_{jk} = Sum_{i=0..N-1} dL/dz_{ik} * dZ_{ik}/dX_{jk}
+    //     dL/dX_{jk} = Sum_{i=0..N-1} dL/dZ_{ik} * dZ_{ik}/dX_{jk}
     //  We have
     //     dZ_{ik}/dX_{jk} = W_{ij}  (same gradient for all batches)
     //  therefore
-    //     dL/dX_{jk} = Sum_{i=0..N-1} dL/dz_{ik} * W_{ij}
+    //     dL/dX_{jk} = Sum_{i=0..N-1} dL/dZ_{ik} * W_{ij}
     //                = dZ^T * W
     //
-    virtual void backward(const Eigen::MatrixXf& dZ) {
-        assert(dZ.rows() == numOutputs());
-        assert(dZ.cols() == _X.cols());  // batch size
-        const Eigen::MatrixXf dW = dZ * _X.transpose();
+    virtual void backward(const Eigen::MatrixXf& dLdZ) {
+        assert(dLdZ.rows() == numOutputs());
+        assert(dLdZ.cols() == _X.cols());  // batch size
+        const Eigen::MatrixXf dW = dLdZ * _X.transpose();
         _dW += dW;
         _numGradients += _X.cols();
         if (_prev != nullptr) {
-            const Eigen::MatrixXf dX = dZ.transpose() * _W;
+            const Eigen::MatrixXf dX = dLdZ.transpose() * _W;
             _prev->backward(dX);
         }
     }
